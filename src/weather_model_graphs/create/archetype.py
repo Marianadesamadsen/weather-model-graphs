@@ -7,6 +7,7 @@ from .base import create_all_graph_components
 
 def create_keisler_graph(
     coords,
+    xyz,
     mesh_node_distance=3,
     coords_crs: pyproj.crs.CRS | None = None,
     graph_crs: pyproj.crs.CRS | None = None,
@@ -57,15 +58,16 @@ def create_keisler_graph(
     """
     return create_all_graph_components(
         coords=coords,
-        m2m_connectivity="flat",
+        xyz=xyz,
+        m2m_connectivity="icosahedral",# "flat"
         m2m_connectivity_kwargs=dict(mesh_node_distance=mesh_node_distance),
-        g2m_connectivity="within_radius",
+        g2m_connectivity="nearest_neighbours",
         m2g_connectivity="nearest_neighbours",
         g2m_connectivity_kwargs=dict(
-            rel_max_dist=0.51,
+            max_num_neighbours=4,
         ),
         m2g_connectivity_kwargs=dict(
-            max_num_neighbours=4,
+            max_num_neighbours=4, 
         ),
         coords_crs=coords_crs,
         graph_crs=graph_crs,

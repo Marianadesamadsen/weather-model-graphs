@@ -1,6 +1,8 @@
 import networkx
 import numpy as np
 from loguru import logger
+import sklearn
+import trimesh
 
 
 def create_single_level_2d_mesh_graph(xy, nx, ny):
@@ -77,6 +79,71 @@ def create_single_level_2d_mesh_graph(xy, nx, ny):
 
     return dg
 
+def create_icosahedral_mesh_graph(subdivisions: int = 0, radius: float = 1.0):
+
+    def xyz_to_latlon(xyz, radius=1.0):
+        x = xyz[:, 0]
+        y = xyz[:, 1]
+        z = xyz[:, 2]
+        lon = np.arctan2(y, x)
+        lat = np.arcsin(np.clip(z / radius, -1.0, 1.0)) 
+        return np.column_stack([np.rad2deg(lon), np.rad2deg(lat)])
+    
+    def _calc_vdiff(pos_v,pos_u):
+            if pos_u.all() == pos_v.all():
+                return np.array([0,0,0])
+            a = pos_u
+            b = pos_v
+            # Unit vector
+            a = a / np.linalg.norm(a)
+            b = b / np.linalg.norm(b)
+            vdiff = b - np.dot(a, b) * a
+            vdiff = vdiff/np.linalg.norm(vdiff)
+            return vdiff
+
+    mesh = trimesh.creation.icosphere(subdivisions=subdivisions, radius=radius)
+    vertices = mesh.vertices
+    faces = mesh.faces
+
+    # Extract unique undirected edges from triangular faces 
+    edges = set()
+    for a, b, c in faces:
+        edges.add(tuple(sorted((a, b)))) # sorted guarentees removal of duplicates
+        edges.add(tuple(sorted((b, c))))
+        edges.add(tuple(sorted((c, a))))
+
+    g = networkx.DiGraph()
+
+    latlon = xyz_to_latlon(vertices, radius=radius)
+    for i, xyz in enumerate(vertices):
+        g.add_node(
+            i,
+            xyz=np.asarray(xyz,dtype=float),
+            pos=np.asarray(latlon[i], dtype=float),  
+            type="mesh",
+        )
+
+    # Add both edge directions  
+    for u, v in edges:
+        pos_u = g.nodes[u]["pos"]
+        pos_v = g.nodes[v]["pos"]
+
+        p1 = np.deg2rad(np.asarray(pos_u)[[1, 0]])
+        p2 = np.deg2rad(np.asarray(pos_v)[[1, 0]])
+        d_uv = radius * sklearn.metrics.pairwise.haversine_distances([p1], [p2])[0][0]
+        d_vu = d_uv # radians
+ 
+        xyz_u = g.nodes[u]["xyz"]
+        xyz_v = g.nodes[v]["xyz"]
+
+        g.add_edge(u, v, len=d_uv, vdiff= _calc_vdiff(xyz_v,xyz_u), level = 0) 
+        g.add_edge(v, u, len=d_vu, vdiff= _calc_vdiff(xyz_u,xyz_v), level = 0) 
+
+    g.graph["subdivisions"] = subdivisions
+    g.graph["mesh_layout"] = "icosahedral"
+    g.graph["radius"] = radius
+ 
+    return g
 
 def create_multirange_2d_mesh_graphs(
     max_num_levels, xy, mesh_node_distance=3, level_refinement_factor=3
@@ -148,3 +215,5 @@ def create_multirange_2d_mesh_graphs(
         G_all_levels.append(g)
 
     return G_all_levels
+
+

@@ -17,6 +17,9 @@ import numpy as np
 import pyproj
 import scipy.spatial
 from loguru import logger
+import sklearn
+from sklearn.neighbors import BallTree
+from weather_model_graphs.create.mesh.mesh import create_icosahedral_mesh_graph
 
 from ..networkx_utils import (
     replace_node_labels_with_unique_ids,
@@ -33,6 +36,7 @@ from .mesh.kinds.hierarchical import create_hierarchical_multiscale_mesh_graph
 
 def create_all_graph_components(
     coords: np.ndarray,
+    xyz: np.ndarray,
     m2m_connectivity: str,
     m2g_connectivity: str,
     g2m_connectivity: str,
@@ -102,11 +106,12 @@ def create_all_graph_components(
     ), "Grid node coordinates should be given as an array of shape [num_grid_nodes, 2]."
 
     # Translate between coordinate crs and crs to use for graph creation
-    if coords_crs is None and coords_crs is None:
+    if coords_crs is None and graph_crs is None:
         logger.debug(
             "No `coords_crs` given: Assuming `coords` contains in-projection Cartesian coordinates."
         )
         xy = coords
+        metric = "euclidean"
     elif (coords_crs is None) != (graph_crs is None):  # xor, only one is None
         logger.warning(
             "Only one of `coords_crs` and `graph_crs` given. Both are needed to "
@@ -114,16 +119,13 @@ def create_all_graph_components(
             "Assuming `coords` contains in-projection Cartesian coordinates."
         )
         xy = coords
-    else:
+        metric = "euclidean"
+    else: 
         logger.debug(
             f"Projecting coords from CRS({coords_crs}) to CRS({graph_crs}) for graph creation."
         )
-        # Convert from coords_crs to to graph_crs
-        coord_transformer = pyproj.Transformer.from_crs(
-            coords_crs, graph_crs, always_xy=True
-        )
-        xy_tuple = coord_transformer.transform(xx=coords[:, 0], yy=coords[:, 1])
-        xy = np.stack(xy_tuple, axis=1)
+        xy = coords 
+        metric = "haversine" 
 
     if m2m_connectivity == "flat":
         graph_components["m2m"] = create_flat_singlescale_mesh_graph(
@@ -137,7 +139,7 @@ def create_all_graph_components(
         graph_components["m2m"] = create_hierarchical_multiscale_mesh_graph(
             xy=xy,
             **m2m_connectivity_kwargs,
-        )
+        ) 
         # Only connect grid to bottom level of hierarchy
         grid_connect_graph = split_graph_by_edge_attribute(
             graph_components["m2m"], "level"
@@ -148,19 +150,25 @@ def create_all_graph_components(
             **m2m_connectivity_kwargs,
         )
         grid_connect_graph = graph_components["m2m"]
+    elif m2m_connectivity == "icosahedral":
+        graph_components["m2m"] = create_icosahedral_mesh_graph(
+            subdivisions=0, radius=1
+        )
+        grid_connect_graph = graph_components["m2m"]
+
     else:
         raise NotImplementedError(f"Kind {m2m_connectivity} not implemented")
 
-    G_grid = create_grid_graph_nodes(xy=xy)
+    G_grid = create_grid_graph_nodes(xy=xy,xyz=xyz)
 
     G_g2m = connect_nodes_across_graphs(
         G_source=G_grid,
         G_target=grid_connect_graph,
         method=g2m_connectivity,
         **g2m_connectivity_kwargs,
+        distance_metric=metric,
     )
     graph_components["g2m"] = G_g2m
-
     if decode_mask is None:
         # decode to all grid nodes
         decode_grid = G_grid
@@ -176,10 +184,11 @@ def create_all_graph_components(
         G_target=decode_grid,
         method=m2g_connectivity,
         **m2g_connectivity_kwargs,
+        distance_metric=metric,
     )
     graph_components["m2g"] = G_m2g
 
-    # add graph component identifier to each edge in each component graph
+    # add graph component identifier to each edge in each component graph 
     for name, graph in graph_components.items():
         for edge in graph.edges:
             graph.edges[edge]["component"] = name
@@ -209,6 +218,44 @@ def create_all_graph_components(
     return G_tot
 
 
+class DistanceMeasurer:
+    def __init__(self, distance_metric, xy_source):
+        self.distance_metric = distance_metric
+
+        if distance_metric == "euclidean":
+            self._tree = scipy.spatial.KDTree(xy_source)
+        elif distance_metric == "haversine":
+            xy = xy_source[:, [1, 0]]
+            self._tree = BallTree(
+                np.radians(xy), metric="haversine"
+            )
+        else: 
+            raise NotImplementedError(
+                f"Distance metric {distance_metric} not implemented"
+            )
+        
+    def query(self, xy_target, k):
+        if self.distance_metric == "euclidean":
+            return self._tree.query(xy_target, k=k)[1]
+        elif self.distance_metric == "haversine":
+            xy_target_rad = np.radians(np.asarray(xy_target)[[1, 0]]).reshape(1, 2)
+            return self._tree.query(xy_target_rad, k=k,return_distance=False)[0]
+        else:
+            raise NotImplementedError(
+                f"Distance metric {self.distance_metric} not implemented"
+            )
+
+    def query_radius(self, xy_target, r):
+        if self.distance_metric == "euclidean":
+            return self._tree.query_ball_point(xy_target, r)
+        elif self.distance_metric == "haversine":
+            xy_target_rad = np.radians(np.asarray(xy_target)[[1, 0]]).reshape(1, 2)
+            return self._tree.query_radius(xy_target_rad, r)[0]
+        else:
+            raise NotImplementedError(
+                f"Distance metric {self.distance_metric} not implemented"
+            )
+
 def connect_nodes_across_graphs(
     G_source,
     G_target,
@@ -216,6 +263,7 @@ def connect_nodes_across_graphs(
     max_dist=None,
     rel_max_dist=None,
     max_num_neighbours=None,
+    distance_metric="euclidean",
 ):
     """
     Create a new graph containing the nodes in `G_source` and `G_target` and add
@@ -261,7 +309,9 @@ def connect_nodes_across_graphs(
 
     # build kd tree for source nodes (e.g. the mesh nodes when constructing m2g)
     xy_source = np.array([G_source.nodes[node]["pos"] for node in G_source.nodes])
-    kdt_s = scipy.spatial.KDTree(xy_source)
+    distance_measurer = DistanceMeasurer(
+        distance_metric=distance_metric, xy_source=xy_source
+    )
 
     # Determine method and perform checks once
     # Conditionally define _find_neighbour_node_idxs_in_source_mesh for use in
@@ -283,7 +333,7 @@ def connect_nodes_across_graphs(
         # which is at a relative distance of 1. This relative distance is equal
         # to the diagonal of one rectangle.
         rad_graph = connect_nodes_across_graphs(
-            G_source, G_target, method="within_radius", rel_max_dist=1.0
+            G_source, G_target, method="within_radius", rel_max_dist=1.0, distance_metric=distance_metric
         )
 
         # Filter edges to those that fit within a rectangle of measurements dx,dy
@@ -326,7 +376,7 @@ def connect_nodes_across_graphs(
             )
 
         def _find_neighbour_node_idxs_in_source_mesh(xy_target):
-            neigh_idx = kdt_s.query(xy_target, 1)[1]
+            neigh_idx = distance_measurer.query(xy_target, 1)
             return [neigh_idx]
 
     elif method == "nearest_neighbours":
@@ -340,7 +390,7 @@ def connect_nodes_across_graphs(
             )
 
         def _find_neighbour_node_idxs_in_source_mesh(xy_target):
-            neigh_idxs = kdt_s.query(xy_target, max_num_neighbours)[1]
+            neigh_idxs = distance_measurer.query(xy_target, max_num_neighbours)
             return neigh_idxs
 
     elif method == "within_radius":
@@ -391,7 +441,7 @@ def connect_nodes_across_graphs(
             )
 
         def _find_neighbour_node_idxs_in_source_mesh(xy_target):
-            neigh_idxs = kdt_s.query_ball_point(xy_target, query_dist)
+            neigh_idxs = distance_measurer.query_radius(xy_target, query_dist)
             return neigh_idxs
 
     else:
@@ -411,20 +461,47 @@ def connect_nodes_across_graphs(
         for i in neigh_idxs:
             source_node = source_nodes_list[i]
             # add edge from source to target
-            G_connect.add_edge(source_node, target_node)
-            d = np.sqrt(
-                np.sum(
-                    (
-                        G_connect.nodes[source_node]["pos"]
-                        - G_connect.nodes[target_node]["pos"]
-                    )
-                    ** 2
-                )
-            )
-            G_connect.edges[source_node, target_node]["len"] = d
-            G_connect.edges[source_node, target_node]["vdiff"] = (
-                G_connect.nodes[source_node]["pos"]
-                - G_connect.nodes[target_node]["pos"]
+            G_connect.add_edge(source_node, target_node) 
+            d = _calc_distance(
+                pos1=G_source.nodes[source_node]["pos"],
+                pos2=G_target.nodes[target_node]["pos"],
+                distance_metric=distance_metric,
             )
 
+            pos_v = G_connect.nodes[source_node]["xyz"]
+            pos_u = G_connect.nodes[target_node]["xyz"]
+
+            # Computing the directional vector depending on the metric (either spherical or regular)
+            vdiff = _calc_vdiff(pos_v,pos_u,distance_metric) 
+
+            G_connect.edges[source_node, target_node]["len"] = d
+            G_connect.edges[source_node, target_node]["vdiff"] = vdiff
+
     return G_connect
+
+def _calc_vdiff(pos_v,pos_u,distance_metric):
+
+    if distance_metric == "euclidean":
+        vdiff = pos_v - pos_u
+    elif distance_metric == "haversine":
+        if pos_u.all() == pos_v.all():
+                return np.array([0,0,0])
+        a = pos_u
+        b = pos_v
+        # Unit vector
+        a = a / np.linalg.norm(a)
+        b = b / np.linalg.norm(b)
+        vdiff = b - np.dot(a, b) * a
+        vdiff = vdiff/np.linalg.norm(vdiff)
+    return vdiff
+
+def _calc_distance(pos1, pos2, distance_metric):
+    if distance_metric == "euclidean":
+        return np.sqrt(np.sum((pos1 - pos2) ** 2))
+    elif distance_metric == "haversine":
+        p1 = np.deg2rad(np.asarray(pos1)[[1, 0]])
+        p2 = np.deg2rad(np.asarray(pos2)[[1, 0]])
+        return sklearn.metrics.pairwise.haversine_distances([p1], [p2])[0][0] #np.radians
+    else:
+        raise NotImplementedError(f"Distance metric {distance_metric} not implemented")
+    

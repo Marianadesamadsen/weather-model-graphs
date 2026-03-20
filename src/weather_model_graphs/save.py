@@ -70,7 +70,7 @@ def to_pyg(
         edge_features = ["len", "vdiff"]
 
     if node_features is None:
-        node_features = ["pos"]
+        node_features = ["pos", "xyz"]
 
     # check that the node labels are integers and unique so that they can be used as indices
     if not all(isinstance(node, int) for node in graph.nodes):
@@ -166,3 +166,110 @@ def to_pickle(graph: networkx.DiGraph, output_directory: str, name: str):
     with open(fp, "wb") as f:
         pickle.dump(graph, f)
     logger.info(f"Saved graph to {fp}.")
+
+# In weather_model_graphs/save.py
+
+def to_neural_lam(
+    graph_components: dict,          # {"g2m": nx.DiGraph, "m2m": nx.DiGraph, "m2g": nx.DiGraph}
+    output_directory: str,
+    hierarchical: bool = False,
+):
+    """ 
+    Save wmg graph components in the exact format neural-lam's load_graph() expects.
+    
+    Parameters
+    ----------
+    graph_components : dict
+        Dictionary with keys "g2m", "m2m", "m2g", each containing a networkx.DiGraph
+        as returned by create_*_graph(..., return_components=True).
+    output_directory : str
+        Directory to write the .pt files to.
+    hierarchical : bool
+        If True, the m2m graph is expected to have 'direction' and 'level' edge
+        attributes and will be split into same-level, up, and down components.
+    """
+    Path(output_directory).mkdir(exist_ok=True, parents=True)
+
+    # --- g2m and m2g: single tensors, no splitting needed ---
+    for name in ("g2m", "m2g"):
+        to_pyg(
+            graph=graph_components[name],
+            output_directory=output_directory,
+            name=name,
+            list_from_attribute=None,
+        )
+
+    m2m = graph_components["m2m"]
+
+    if hierarchical:
+        # Split m2m by direction → {"up", "down", "same"}
+        m2m_parts = split_graph_by_edge_attribute(graph=m2m, attr="direction")
+
+        # Same-level edges → m2m_edge_index.pt as List[Tensor] split by level
+        to_pyg(
+            graph=m2m_parts["same"],
+            output_directory=output_directory,
+            name="m2m",
+            list_from_attribute="level",
+        )
+
+        # Up/down edges → mesh_up_*.pt / mesh_down_*.pt (key rename!)
+        for direction in ("up", "down"):
+            to_pyg(
+                graph=m2m_parts[direction],
+                output_directory=output_directory,
+                name=f"mesh_{direction}",     # "mesh_up" not "m2m_up"
+                list_from_attribute="level",
+            )
+
+        # Aggregate mesh node features from all levels into single List[Tensor]
+        same_subgraphs = split_graph_by_edge_attribute(
+            graph=m2m_parts["same"], attr="level"
+        )
+        mesh_features_list = [] 
+        for level_key in sorted(same_subgraphs.keys()):
+            g = sort_nodes_in_graph(same_subgraphs[level_key])
+            pyg_g = pyg_convert.from_networkx(g)
+            node_feats = pyg_g["pos"] 
+            if node_feats.ndim == 1:
+                node_feats = node_feats.unsqueeze(1)
+            mesh_features_list.append(node_feats.to(torch.float32))
+
+        torch.save(
+            mesh_features_list,
+            Path(output_directory) / "mesh_features.pt",
+        )
+    else:
+        # Flat graph: save m2m via to_pyg (single tensor)
+        to_pyg(
+            graph=m2m,
+            output_directory=output_directory,
+            name="m2m",
+            list_from_attribute=None,
+        )
+
+        # Wrap saved single tensors into lists (BufferList expects List)
+        for suffix in ("edge_index", "features"):
+            fp = Path(output_directory) / f"m2m_{suffix}.pt"
+            tensor = torch.load(fp, weights_only=True)
+            if not isinstance(tensor, list):
+                torch.save([tensor], fp)
+
+        # Single-level mesh node features → List with one element
+        g = sort_nodes_in_graph(m2m)
+        pyg_g = pyg_convert.from_networkx(g)
+        # node_feats_pos = pyg_g["pos"]
+        # if node_feats_pos.ndim == 1:
+        #     node_feats_pos = node_feats_pos.unsqueeze(1)
+        node_feats_xyz = pyg_g["xyz"]
+        if node_feats_xyz.ndim == 1:
+            node_feats_xyz = node_feats_xyz.unsqueeze(1)
+
+        torch.save(
+            [node_feats_xyz.to(torch.float32)],
+            Path(output_directory) / "mesh_features.pt",
+        )
+
+    # Clean up spurious *_node_features.pt files auto-created by to_pyg()
+    for f in Path(output_directory).glob("*_node_features.pt"):
+        f.unlink()
