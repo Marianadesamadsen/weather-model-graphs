@@ -79,7 +79,7 @@ def create_single_level_2d_mesh_graph(xy, nx, ny):
 
     return dg
 
-def create_icosahedral_mesh_graph(subdivisions: int = 0, radius: float = 1.0):
+def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
 
     def xyz_to_latlon(xyz, radius=1.0):
         x = xyz[:, 0]
