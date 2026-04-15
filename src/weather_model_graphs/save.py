@@ -70,7 +70,7 @@ def to_pyg(
         edge_features = ["len", "vdiff"]
 
     if node_features is None:
-        node_features = ["pos", "xyz"]
+        node_features = ["pos"]
 
     # check that the node labels are integers and unique so that they can be used as indices
     if not all(isinstance(node, int) for node in graph.nodes):
@@ -258,10 +258,7 @@ def to_neural_lam(
         # Single-level mesh node features → List with one element
         g = sort_nodes_in_graph(m2m)
         pyg_g = pyg_convert.from_networkx(g)
-        # node_feats_pos = pyg_g["pos"]
-        # if node_feats_pos.ndim == 1:
-        #     node_feats_pos = node_feats_pos.unsqueeze(1)
-        node_feats_xyz = pyg_g["xyz"]
+        node_feats_xyz = pyg_g["pos"]
         if node_feats_xyz.ndim == 1:
             node_feats_xyz = node_feats_xyz.unsqueeze(1)
 

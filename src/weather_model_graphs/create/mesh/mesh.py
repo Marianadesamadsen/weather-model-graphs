@@ -81,7 +81,7 @@ def create_single_level_2d_mesh_graph(xy, nx, ny):
 
 def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
 
-    def xyz_to_latlon(xyz, radius=1.0):
+    def xyz_to_latlon_vector(xyz, radius=1.0):
         x = xyz[:, 0]
         y = xyz[:, 1]
         z = xyz[:, 2]
@@ -89,17 +89,72 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
         lat = np.arcsin(np.clip(z / radius, -1.0, 1.0)) 
         return np.column_stack([np.rad2deg(lon), np.rad2deg(lat)])
     
+    def latlon_to_xyz(lat, lon, R=1.0):
+        lat = np.deg2rad(lat)
+        lon = np.deg2rad(lon)
+        x = R * np.cos(lat) * np.cos(lon)
+        y = R * np.cos(lat) * np.sin(lon)
+        z = R * np.sin(lat)
+        return np.array([x, y, z])
+
+    def tangent_unit_vector_xyz(xyz_v,xyz_u):
+
+        if np.allclose(xyz_u, xyz_v):
+            return np.array([0, 0, 0])
+        a = xyz_u
+        b = xyz_v
+        # Unit vector
+        a = a / np.linalg.norm(a)
+        b = b / np.linalg.norm(b)
+        vdiff = b - np.dot(a, b) * a
+        vdiff = vdiff/np.linalg.norm(vdiff)
+        
+        return vdiff
+
+    def local_east_north_basis(lat, lon):
+
+        lat = np.deg2rad(lat)
+        lon = np.deg2rad(lon)
+
+        e_east = np.array([
+            -np.sin(lon),
+            np.cos(lon),
+            0.0
+        ])
+
+        e_north = np.array([
+            -np.sin(lat) * np.cos(lon),
+            -np.sin(lat) * np.sin(lon),
+            np.cos(lat)
+        ])
+
+        return e_east, e_north
+
+    def vdiff_east_north(pos_u, pos_v):
+
+        lat_u, lon_u = pos_u
+        lat_v, lon_v = pos_v
+
+        xyz_u = latlon_to_xyz(lat_u, lon_u, R=1.0)
+        xyz_v = latlon_to_xyz(lat_v, lon_v, R=1.0)
+
+        d_hat = tangent_unit_vector_xyz(
+            xyz_v, xyz_u
+        )
+
+        e_east, e_north = local_east_north_basis(lat_u, lon_u)
+
+        d_east = np.dot(d_hat, e_east)
+        d_north = np.dot(d_hat, e_north)
+
+        return np.array([d_east, d_north])
+
+
     def _calc_vdiff(pos_v,pos_u):
-            if pos_u.all() == pos_v.all():
-                return np.array([0,0,0])
-            a = pos_u
-            b = pos_v
-            # Unit vector
-            a = a / np.linalg.norm(a)
-            b = b / np.linalg.norm(b)
-            vdiff = b - np.dot(a, b) * a
-            vdiff = vdiff/np.linalg.norm(vdiff)
-            return vdiff
+
+        vdiff = vdiff_east_north(pos_u, pos_v)
+
+        return vdiff
 
     mesh = trimesh.creation.icosphere(subdivisions=subdivisions, radius=radius)
     vertices = mesh.vertices
@@ -114,11 +169,10 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
 
     g = networkx.DiGraph()
 
-    latlon = xyz_to_latlon(vertices, radius=radius)
-    for i, xyz in enumerate(vertices):
+    latlon = xyz_to_latlon_vector(vertices, radius=radius)
+    for i, _ in enumerate(vertices):
         g.add_node(
             i,
-            xyz=np.asarray(xyz,dtype=float),
             pos=np.asarray(latlon[i], dtype=float),  
             type="mesh",
         )
@@ -133,11 +187,8 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
         d_uv = radius * sklearn.metrics.pairwise.haversine_distances([p1], [p2])[0][0]
         d_vu = d_uv # radians
  
-        xyz_u = g.nodes[u]["xyz"]
-        xyz_v = g.nodes[v]["xyz"]
-
-        g.add_edge(u, v, len=d_uv, vdiff= _calc_vdiff(xyz_v,xyz_u), level = 0) 
-        g.add_edge(v, u, len=d_vu, vdiff= _calc_vdiff(xyz_u,xyz_v), level = 0) 
+        g.add_edge(u, v, len=d_uv, vdiff= _calc_vdiff(pos_v=pos_v, pos_u=pos_u), level = 0) 
+        g.add_edge(v, u, len=d_vu, vdiff= _calc_vdiff(pos_v=pos_u, pos_u=pos_v), level = 0) 
 
     g.graph["subdivisions"] = subdivisions
     g.graph["mesh_layout"] = "icosahedral"

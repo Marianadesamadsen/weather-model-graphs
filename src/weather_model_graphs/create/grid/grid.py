@@ -3,7 +3,7 @@ import networkx
 from ...networkx_utils import prepend_node_index
 
 
-def create_grid_graph_nodes(xy, xyz, level_id=-1):
+def create_grid_graph_nodes(xy, level_id=-1):
     """
     Create a networkx.Graph comprising only nodes for each (x,y)-point in the `xy` coordinate
     array (the attribute `pos` giving the (x,y)-coordinate value) and with
@@ -38,9 +38,8 @@ def create_grid_graph_nodes(xy, xyz, level_id=-1):
     # Add grid nodes
     # vg features (only pos introduced here)
     for i, pos in enumerate(xy):
-        xyz_i = xyz[i]
         # pos is in feature but here explicit for convenience
-        G_grid.add_node((i,), pos=pos,xyz = xyz_i, level=level_id, type="grid")
+        G_grid.add_node((i,), pos=pos, level=level_id, type="grid")
 
     # add `level_id` (default to -1) to node key to separate grid nodes (-1,i) from mesh nodes
     # (i,) and impose sorting order such that vm are the first nodes

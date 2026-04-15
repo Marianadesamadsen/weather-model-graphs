@@ -36,7 +36,6 @@ from .mesh.kinds.hierarchical import create_hierarchical_multiscale_mesh_graph
 
 def create_all_graph_components(
     coords: np.ndarray,
-    xyz: np.ndarray,
     m2m_connectivity: str,
     m2g_connectivity: str,
     g2m_connectivity: str,
@@ -159,7 +158,7 @@ def create_all_graph_components(
     else:
         raise NotImplementedError(f"Kind {m2m_connectivity} not implemented")
 
-    G_grid = create_grid_graph_nodes(xy=xy,xyz=xyz)
+    G_grid = create_grid_graph_nodes(xy=xy)
 
     G_g2m = connect_nodes_across_graphs(
         G_source=G_grid,
@@ -468,8 +467,8 @@ def connect_nodes_across_graphs(
                 distance_metric=distance_metric,
             )
 
-            pos_v = G_connect.nodes[source_node]["xyz"]
-            pos_u = G_connect.nodes[target_node]["xyz"]
+            pos_v = G_connect.nodes[source_node]["pos"]
+            pos_u = G_connect.nodes[target_node]["pos"]
 
             # Computing the directional vector depending on the metric (either spherical or regular)
             vdiff = _calc_vdiff(pos_v,pos_u,distance_metric) 
@@ -479,20 +478,74 @@ def connect_nodes_across_graphs(
 
     return G_connect
 
+def latlon_to_xyz(lat, lon, R=1.0):
+    lat = np.deg2rad(lat)
+    lon = np.deg2rad(lon)
+    x = R * np.cos(lat) * np.cos(lon)
+    y = R * np.cos(lat) * np.sin(lon)
+    z = R * np.sin(lat)
+    return np.array([x, y, z])
+
+def tangent_unit_vector_xyz(xyz_v,xyz_u):
+
+    if np.allclose(xyz_u, xyz_v):
+        return np.array([0, 0, 0])
+    a = xyz_u
+    b = xyz_v
+    # Unit vector
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    vdiff = b - np.dot(a, b) * a
+    vdiff = vdiff/np.linalg.norm(vdiff)
+    
+    return vdiff
+
+def local_east_north_basis(lat, lon):
+
+    lat = np.deg2rad(lat)
+    lon = np.deg2rad(lon)
+
+    e_east = np.array([
+        -np.sin(lon),
+         np.cos(lon),
+         0.0
+    ])
+
+    e_north = np.array([
+        -np.sin(lat) * np.cos(lon),
+        -np.sin(lat) * np.sin(lon),
+         np.cos(lat)
+    ])
+
+    return e_east, e_north
+
+def vdiff_east_north(pos_u, pos_v):
+
+    lat_u, lon_u = pos_u
+    lat_v, lon_v = pos_v
+
+    xyz_u = latlon_to_xyz(lat_u, lon_u, R=1.0)
+    xyz_v = latlon_to_xyz(lat_v, lon_v, R=1.0)
+
+    d_hat = tangent_unit_vector_xyz(
+        xyz_v, xyz_u
+    )
+
+    e_east, e_north = local_east_north_basis(lat_u, lon_u)
+
+    d_east = np.dot(d_hat, e_east)
+    d_north = np.dot(d_hat, e_north)
+
+    return np.array([d_east, d_north])
+
+
 def _calc_vdiff(pos_v,pos_u,distance_metric):
 
     if distance_metric == "euclidean":
         vdiff = pos_v - pos_u
     elif distance_metric == "haversine":
-        if pos_u.all() == pos_v.all():
-                return np.array([0,0,0])
-        a = pos_u
-        b = pos_v
-        # Unit vector
-        a = a / np.linalg.norm(a)
-        b = b / np.linalg.norm(b)
-        vdiff = b - np.dot(a, b) * a
-        vdiff = vdiff/np.linalg.norm(vdiff)
+        vdiff = vdiff_east_north(pos_u, pos_v)
+
     return vdiff
 
 def _calc_distance(pos1, pos2, distance_metric):
