@@ -151,7 +151,7 @@ def create_all_graph_components(
         grid_connect_graph = graph_components["m2m"]
     elif m2m_connectivity == "icosahedral":
         graph_components["m2m"] = create_icosahedral_mesh_graph(
-            subdivisions=4, radius=1
+            subdivisions=1, radius=1
         )
         grid_connect_graph = graph_components["m2m"]
 

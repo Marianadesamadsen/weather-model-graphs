@@ -62,10 +62,10 @@ def create_keisler_graph(
         g2m_connectivity="nearest_neighbours",
         m2g_connectivity="nearest_neighbours",
         g2m_connectivity_kwargs=dict(
-            max_num_neighbours=1,
+            max_num_neighbours=7,
         ),
         m2g_connectivity_kwargs=dict(
-            max_num_neighbours=1, 
+            max_num_neighbours=7, 
         ),
         coords_crs=coords_crs,
         graph_crs=graph_crs,
