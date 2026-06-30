@@ -79,7 +79,7 @@ def create_single_level_2d_mesh_graph(xy, nx, ny):
 
     return dg
 
-def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
+def create_icosahedral_mesh_graph(subdivisions: int = 5, radius: float = 1.0):
 
     def xyz_to_latlon_vector(xyz, radius=1.0):
         x = xyz[:, 0]
@@ -132,6 +132,9 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
 
     def vdiff_east_north(pos_u, pos_v):
 
+        # lon_u, lat_u = pos_u
+        # lon_v, lat_v = pos_v
+
         lat_u, lon_u = pos_u
         lat_v, lon_v = pos_v
 
@@ -148,7 +151,6 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
         d_north = np.dot(d_hat, e_north)
 
         return np.array([d_east, d_north])
-
 
     def _calc_vdiff(pos_v,pos_u):
 
@@ -176,17 +178,19 @@ def create_icosahedral_mesh_graph(subdivisions: int = 3, radius: float = 1.0):
             pos=np.asarray(latlon[i], dtype=float),  
             type="mesh",
         )
-
+        
     # Add both edge directions  
     for u, v in edges:
         pos_u = g.nodes[u]["pos"]
         pos_v = g.nodes[v]["pos"]
-
+        
         p1 = np.deg2rad(np.asarray(pos_u)[[1, 0]])
         p2 = np.deg2rad(np.asarray(pos_v)[[1, 0]])
         d_uv = radius * sklearn.metrics.pairwise.haversine_distances([p1], [p2])[0][0]
         d_vu = d_uv # radians
  
+        # g.add_edge(u, v, len=d_uv, vdiff= _calc_vdiff(pos_v=pos_u, pos_u=pos_v), level = 0) 
+        # g.add_edge(v, u, len=d_vu, vdiff= _calc_vdiff(pos_v=pos_v, pos_u=pos_u), level = 0) 
         g.add_edge(u, v, len=d_uv, vdiff= _calc_vdiff(pos_v=pos_v, pos_u=pos_u), level = 0) 
         g.add_edge(v, u, len=d_vu, vdiff= _calc_vdiff(pos_v=pos_u, pos_u=pos_v), level = 0) 
 

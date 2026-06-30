@@ -151,7 +151,7 @@ def create_all_graph_components(
         grid_connect_graph = graph_components["m2m"]
     elif m2m_connectivity == "icosahedral":
         graph_components["m2m"] = create_icosahedral_mesh_graph(
-            subdivisions=1, radius=1
+            subdivisions=2, radius=1
         )
         grid_connect_graph = graph_components["m2m"]
 
@@ -521,8 +521,8 @@ def local_east_north_basis(lat, lon):
 
 def vdiff_east_north(pos_u, pos_v):
 
-    lat_u, lon_u = pos_u
-    lat_v, lon_v = pos_v
+    lon_u, lat_u = pos_u
+    lon_v, lat_v = pos_v
 
     xyz_u = latlon_to_xyz(lat_u, lon_u, R=1.0)
     xyz_v = latlon_to_xyz(lat_v, lon_v, R=1.0)
@@ -538,11 +538,10 @@ def vdiff_east_north(pos_u, pos_v):
 
     return np.array([d_east, d_north])
 
-
 def _calc_vdiff(pos_v,pos_u,distance_metric):
 
     if distance_metric == "euclidean":
-        vdiff = pos_v - pos_u
+        vdiff = pos_v - pos_u # Source - target, so vector points from target to source
     elif distance_metric == "haversine":
         vdiff = vdiff_east_north(pos_u, pos_v)
 
